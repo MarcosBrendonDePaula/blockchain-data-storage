@@ -4,43 +4,34 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-
-[dependencies]
+# Core Dependencies
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0" # Or bincode, depending on serialization format
+serde_json = "1.0"
 sha2 = "0.10"
-hex = "0.4" # For representing hashes as strings
-
-
-
-# Network Dependencies
-libp2p = { version = "0.53", features = ["tokio", "tcp", "yamux", "mplex", "kad", "gossipsub", "mdns", "macros", "request-response"] }
-tokio = { version = "1", features = ["full"] }
-futures = "0.3"
-hex = "0.4" # Already added, but good to list here
-serde = { version = "1.0", features = ["derive"] } # Already added
-serde_json = "1.0" # Already added
-bincode = "1.3" # For binary serialization of network messages
+hex = "0.4"
+bincode = "1.3"
 log = "0.4"
 env_logger = "0.11"
 
-
+# Network Dependencies
+libp2p = { version = "0.53", features = ["tokio", "tcp", "yamux", "kad", "gossipsub", "mdns", "macros", "request-response"] }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
 
 # Storage Dependencies
-rocksdb = { version = "0.22", default-features = false, features = ["lz4"] } # Using lz4 compression
-bincode = "1.3" # Already added, for block serialization
-
-
+rocksdb = { version = "0.22", default-features = false, features = ["lz4"] }
 
 # CLI and Runtime Dependencies
 clap = { version = "4.5", features = ["derive"] }
-tokio = { version = "1", features = ["full"] }
-env_logger = "0.11"
-log = "0.4"
-
-
 
 # RPC API Dependencies
 actix-web = "4"
-serde_json = "1.0" # Already added, but ensure it's present
+
+# Offchain Storage Dependencies
+base64 = "0.22"
+thiserror = "1.0"
+
+# Testing Dependencies
+[dev-dependencies]
+tempfile = "3.10"
 
