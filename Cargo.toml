@@ -24,3 +24,9 @@ bincode = "1.3" # For binary serialization of network messages
 log = "0.4"
 env_logger = "0.11"
 
+
+
+# Storage Dependencies
+rocksdb = { version = "0.22", default-features = false, features = ["lz4"] } # Using lz4 compression
+bincode = "1.3" # Already added, for block serialization
+
