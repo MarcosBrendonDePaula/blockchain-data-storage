@@ -5,7 +5,7 @@ use std::io::{Write, Read};
 use std::path::{Path, PathBuf};
 use sha2::{Sha256, Digest};
 use hex;
-use log::{info, error, debug};
+use log::{info, error, debug, warn};
 
 // Custom error type for OffChain Storage operations
 #[derive(Debug, thiserror::Error)]

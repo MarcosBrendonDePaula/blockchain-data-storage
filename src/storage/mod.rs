@@ -3,60 +3,74 @@
 //! Handles the persistence of blockchain data (blocks, etc.) to a local database.
 //! Currently uses RocksDB as the underlying key-value store.
 
-use crate::core::{Block, BlockHeader, Hash, Transaction};
-use rocksdb::{Options, DB, WriteBatch};
+use crate::core::{Block, Hash};
+use rocksdb::{Options, DB, WriteBatch, Error as RocksDbError};
 use std::path::Path;
 use std::sync::Arc;
-use log::{error, info, warn};
+use log::{error, info};
 
 // Define key prefixes for different data types in RocksDB
 const PREFIX_BLOCK: u8 = b'b'; // Key: PREFIX_BLOCK + block_hash => Value: serialized_block
-const PREFIX_HEADER: u8 = b'd'; // Key: PREFIX_HEADER + block_hash => Value: serialized_header (Optional optimization)
+// Removido PREFIX_HEADER não utilizado
 const PREFIX_HEIGHT_TO_HASH: u8 = b'h'; // Key: PREFIX_HEIGHT_TO_HASH + height (u64 BE) => Value: block_hash
 const KEY_LAST_HASH: &[u8] = b"lh"; // Key: KEY_LAST_HASH => Value: last_block_hash
 const KEY_CHAIN_HEIGHT: &[u8] = b"ch"; // Key: KEY_CHAIN_HEIGHT => Value: current_height (u64 BE)
 
 /// Manages the interaction with the RocksDB database for blockchain storage.
-#[derive(Clone)] // Clone is cheap due to Arc
+#[derive(Debug, Clone)] // Clone is cheap due to Arc
 pub struct StorageManager {
     db: Arc<DB>,
 }
 
+// Custom error type to wrap RocksDB and other potential storage errors
+#[derive(Debug, thiserror::Error)]
+pub enum StorageError {
+    #[error("RocksDB error: {0}")]
+    Database(RocksDbError), // Removed #[from]
+    #[error("Serialization error: {0}")]
+    Serialization(bincode::Error), // Removed #[from]
+    #[error("Deserialization error: {0}")]
+    Deserialization(bincode::Error), // Removed #[from]
+    #[error("Invalid data format: {0}")]
+    InvalidFormat(String),
+}
+
+// Add explicit From<RocksDbError> impl
+impl From<RocksDbError> for StorageError {
+    fn from(err: RocksDbError) -> Self {
+        StorageError::Database(err)
+    }
+}
+
+// Add explicit From<bincode::Error> impl
+// Note: bincode::Error is type alias for Box<bincode::ErrorKind>
+impl From<bincode::Error> for StorageError {
+    fn from(err: bincode::Error) -> Self {
+        // We can't easily distinguish serialization from deserialization here.
+        // Defaulting to Deserialization. If distinction is critical,
+        // manual mapping with map_err might be better where the error occurs.
+        StorageError::Deserialization(err)
+    }
+}
+
 impl StorageManager {
     /// Opens or creates a RocksDB database at the specified path.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - The path to the database directory.
-    ///
-    /// # Returns
-    ///
-    /// * A `Result` containing the `StorageManager` or a `rocksdb::Error`.
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, rocksdb::Error> {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, StorageError> {
         let mut opts = Options::default();
         opts.create_if_missing(true);
-        // TODO: Consider adding Column Families for better organization
-        // TODO: Tune RocksDB options (compression, caching, etc.)
-        let db = DB::open(&opts, path)?;
-        info!("RocksDB database opened successfully.");
+        // Use path.as_ref() to pass a reference
+        // Use '?' now that From<RocksDbError> is implemented manually
+        let db = DB::open(&opts, path.as_ref())?;
+        info!("RocksDB database opened successfully at {:?}", path.as_ref());
         Ok(StorageManager { db: Arc::new(db) })
     }
 
     /// Saves a block to the database.
-    /// This includes storing the block itself, updating the height-to-hash mapping,
-    /// and updating the last hash and chain height.
     /// Uses a WriteBatch for atomicity.
-    ///
-    /// # Arguments
-    ///
-    /// * `block` - The block to save.
-    ///
-    /// # Returns
-    ///
-    /// * An empty `Result` or a `Box<dyn std::error::Error>`.
-    pub fn save_block(&self, block: &Block) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn save_block(&self, block: &Block) -> Result<(), StorageError> {
         let block_hash = block.hash();
         let block_height = block.header.height;
+        // Use '?' now that From<bincode::Error> is implemented manually
         let serialized_block = bincode::serialize(block)?;
 
         let mut batch = WriteBatch::default();
@@ -66,7 +80,9 @@ impl StorageManager {
         batch.put(&block_key, &serialized_block);
 
         // Store height to hash mapping: h<height_be> -> hash
-        let height_key = [&[PREFIX_HEIGHT_TO_HASH], &block_height.to_be_bytes()].concat();
+        let mut height_key = Vec::with_capacity(1 + 8);
+        height_key.push(PREFIX_HEIGHT_TO_HASH);
+        height_key.extend_from_slice(&block_height.to_be_bytes());
         batch.put(&height_key, &block_hash);
 
         // Update last hash: lh -> hash
@@ -75,24 +91,18 @@ impl StorageManager {
         // Update chain height: ch -> height_be
         batch.put(KEY_CHAIN_HEIGHT, &block_height.to_be_bytes());
 
-        self.db.write(batch)?; // Atomic write
+        // Use '?' now that From<RocksDbError> is implemented manually
+        self.db.write(batch)?;
         Ok(())
     }
 
     /// Retrieves a block from the database by its hash.
-    ///
-    /// # Arguments
-    ///
-    /// * `hash` - The hash of the block to retrieve.
-    ///
-    /// # Returns
-    ///
-    /// * An `Option<Block>` containing the deserialized block if found, or `None`.
-    /// * Returns `Err` on database or deserialization errors.
-    pub fn get_block_by_hash(&self, hash: &Hash) -> Result<Option<Block>, Box<dyn std::error::Error>> {
+    pub fn get_block_by_hash(&self, hash: &Hash) -> Result<Option<Block>, StorageError> {
         let block_key = [&[PREFIX_BLOCK], hash.as_slice()].concat();
+        // Use '?' for RocksDB error
         match self.db.get(&block_key)? {
             Some(serialized_block) => {
+                // Use '?' now that From<bincode::Error> is implemented manually
                 let block: Block = bincode::deserialize(&serialized_block)?;
                 Ok(Some(block))
             }
@@ -101,17 +111,11 @@ impl StorageManager {
     }
 
     /// Retrieves a block hash from the database by its height.
-    ///
-    /// # Arguments
-    ///
-    /// * `height` - The height of the block hash to retrieve.
-    ///
-    /// # Returns
-    ///
-    /// * An `Option<Hash>` containing the block hash if found, or `None`.
-    /// * Returns `Err` on database errors.
-    pub fn get_hash_by_height(&self, height: u64) -> Result<Option<Hash>, rocksdb::Error> {
-        let height_key = [&[PREFIX_HEIGHT_TO_HASH], &height.to_be_bytes()].concat();
+    pub fn get_hash_by_height(&self, height: u64) -> Result<Option<Hash>, StorageError> {
+        let mut height_key = Vec::with_capacity(1 + 8);
+        height_key.push(PREFIX_HEIGHT_TO_HASH);
+        height_key.extend_from_slice(&height.to_be_bytes());
+        // Use '?' for RocksDB error
         match self.db.get(&height_key)? {
             Some(hash_vec) => {
                 if hash_vec.len() == 32 {
@@ -119,9 +123,8 @@ impl StorageManager {
                     hash.copy_from_slice(&hash_vec);
                     Ok(Some(hash))
                 } else {
-                    // Data corruption or incorrect key schema?
                     error!("Invalid hash length found for height {}", height);
-                    Ok(None) // Or return an error
+                    Err(StorageError::InvalidFormat(format!("Invalid hash length ({}) for height {}", hash_vec.len(), height)))
                 }
             }
             None => Ok(None),
@@ -129,30 +132,18 @@ impl StorageManager {
     }
 
     /// Retrieves a block from the database by its height.
-    /// First looks up the hash by height, then retrieves the block by hash.
-    ///
-    /// # Arguments
-    ///
-    /// * `height` - The height of the block to retrieve.
-    ///
-    /// # Returns
-    ///
-    /// * An `Option<Block>` containing the deserialized block if found, or `None`.
-    /// * Returns `Err` on database or deserialization errors.
-    pub fn get_block_by_height(&self, height: u64) -> Result<Option<Block>, Box<dyn std::error::Error>> {
+    pub fn get_block_by_height(&self, height: u64) -> Result<Option<Block>, StorageError> {
+        // Use '?' for potential StorageError from get_hash_by_height
         match self.get_hash_by_height(height)? {
+            // Use '?' for potential StorageError from get_block_by_hash
             Some(hash) => self.get_block_by_hash(&hash),
             None => Ok(None),
         }
     }
 
     /// Retrieves the hash of the latest block in the main chain.
-    ///
-    /// # Returns
-    ///
-    /// * An `Option<Hash>` containing the last block hash if set, or `None`.
-    /// * Returns `Err` on database errors.
-    pub fn get_last_block_hash(&self) -> Result<Option<Hash>, rocksdb::Error> {
+    pub fn get_last_block_hash(&self) -> Result<Option<Hash>, StorageError> {
+        // Use '?' for RocksDB error
         match self.db.get(KEY_LAST_HASH)? {
             Some(hash_vec) => {
                 if hash_vec.len() == 32 {
@@ -160,8 +151,8 @@ impl StorageManager {
                     hash.copy_from_slice(&hash_vec);
                     Ok(Some(hash))
                 } else {
-                    error!("Invalid last_hash length found in DB");
-                    Ok(None)
+                    error!("Invalid last_hash length found in DB: {}", hash_vec.len());
+                    Err(StorageError::InvalidFormat("Invalid last_hash length".to_string()))
                 }
             }
             None => Ok(None), // Not set yet (e.g., empty DB)
@@ -169,27 +160,20 @@ impl StorageManager {
     }
 
     /// Retrieves the current height of the main chain.
-    ///
-    /// # Returns
-    ///
-    /// * An `Option<u64>` containing the chain height if set, or `None`.
-    /// * Returns `Err` on database errors.
-    pub fn get_chain_height(&self) -> Result<Option<u64>, rocksdb::Error> {
+    pub fn get_chain_height(&self) -> Result<Option<u64>, StorageError> {
+        // Use '?' for RocksDB error
         match self.db.get(KEY_CHAIN_HEIGHT)? {
             Some(height_bytes) => {
                 if height_bytes.len() == 8 {
                     Ok(Some(u64::from_be_bytes(height_bytes.try_into().unwrap())))
                 } else {
-                    error!("Invalid chain_height length found in DB");
-                    Ok(None)
+                    error!("Invalid chain_height length found in DB: {}", height_bytes.len());
+                    Err(StorageError::InvalidFormat("Invalid chain_height length".to_string()))
                 }
             }
             None => Ok(None), // Not set yet
         }
     }
-
-    // TODO: Add functions for storing/retrieving transactions by hash (optional index)
-    // TODO: Add functions for managing blockchain state (e.g., UTXO set if applicable)
 }
 
 #[cfg(test)]
@@ -210,14 +194,12 @@ mod tests {
     fn test_storage_new_open() {
         let dir = tempdir().unwrap();
         {
+            // Pass path by reference
             let storage = StorageManager::new(dir.path()).expect("Failed to create/open DB");
-            // DB should be open here
             info!("DB opened at {:?}", dir.path());
         } // Storage is dropped, DB should be closed
-        // Reopen the same DB
         let storage = StorageManager::new(dir.path()).expect("Failed to reopen DB");
         info!("DB reopened successfully.");
-        // Check initial state (should be empty)
         assert!(storage.get_last_block_hash().unwrap().is_none());
         assert!(storage.get_chain_height().unwrap().is_none());
     }

@@ -5,11 +5,9 @@
 
 use crate::core::{BlockHeader, Hash};
 use crate::storage::StorageManager; // Import StorageManager
-use sha2::{Sha256, Digest};
 use hex;
 use log::{info, warn};
 use std::cmp::{max, min};
-use std::time::Duration;
 
 // --- Difficulty Adjustment Parameters ---
 

@@ -2,7 +2,8 @@
 
 use blockchain_data_storage::core::Blockchain;
 use blockchain_data_storage::network;
-use blockchain_data_storage::storage::StorageManager;
+// StorageManager is now handled internally by Blockchain::new
+// use blockchain_data_storage::storage::StorageManager;
 
 use clap::Parser;
 use log::{info, error};
@@ -35,20 +36,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting blockchain node...");
     info!("Data directory: {:?}", cli.data_dir);
 
-    // Initialize Storage Manager
-    let storage_manager = match StorageManager::new(&cli.data_dir) {
-        Ok(sm) => {
-            info!("Storage manager initialized successfully.");
-            sm
-        }
-        Err(e) => {
-            error!("Failed to initialize storage manager: {}", e);
-            return Err(e.into());
-        }
-    };
+    // Storage Manager is initialized within Blockchain::new
 
-    // Initialize Blockchain
-    let mut blockchain = match Blockchain::new(storage_manager) {
+    // Initialize Blockchain - Pass the data directory path directly
+    let mut blockchain = match Blockchain::new(&cli.data_dir) { // Pass path
         Ok(bc) => {
             info!("Blockchain core initialized successfully.");
             bc
@@ -59,10 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Initialize Genesis Block if needed
+    // Initialize Genesis Block if needed - Adjust match arms for Ok(())
     match blockchain.initialize_genesis_if_needed() {
-        Ok(true) => info!("Genesis block created and initialized."),
-        Ok(false) => info!("Existing blockchain found, genesis block loaded."),
+        Ok(()) => info!("Genesis block checked/initialized successfully."), // Handle Ok(())
         Err(e) => {
             error!("Failed during genesis block check/initialization: {}", e);
             return Err(e.into());

@@ -1,13 +1,12 @@
 // src/rpc.rs
 
-use actix_web::{web, App, HttpServer, Responder, HttpResponse, post, get};
+use actix_web::{web, App, HttpServer, Responder, HttpResponse, post};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use log::{info, error, warn};
 use base64::{Engine as _, engine::general_purpose::STANDARD as base64_engine}; // For payload encoding
 
-use crate::core::{Blockchain, Transaction, Block, BlockchainError, Hash};
-use crate::storage::StorageError;
+use crate::core::{Blockchain, Transaction};
 use crate::offchain_storage::{OffChainStorageManager, OffChainStorageError}; // Import offchain storage
 
 // --- JSON-RPC Structures (Keep existing ones) ---
@@ -85,7 +84,8 @@ async fn rpc_handler(req_body: web::Json<JsonRpcRequest>, data: web::Data<AppSta
 
     info!("RPC Request Received - Method: {}, ID: {:?}", method, request_id);
 
-    let response = match method {
+    // Corrected: All handlers should return JsonRpcResponse<serde_json::Value>
+    let response: JsonRpcResponse<serde_json::Value> = match method {
         "send_transaction" => handle_send_transaction(params, blockchain_arc, offchain_storage_arc).await,
         "get_chain_height" => handle_get_chain_height(blockchain_arc).await,
         "get_block_by_height" => handle_get_block_by_height(params, blockchain_arc).await,
@@ -93,7 +93,7 @@ async fn rpc_handler(req_body: web::Json<JsonRpcRequest>, data: web::Data<AppSta
         "get_offchain_data" => handle_get_offchain_data(params, offchain_storage_arc).await, // Add new handler
         _ => {
             error!("Unsupported RPC method: {}", method);
-            create_error_response::<()>(
+            create_error_response(
                 request_id,
                 -32601,
                 "Method not found".to_string(),
@@ -111,31 +111,44 @@ async fn handle_send_transaction(
     params: serde_json::Value,
     blockchain: Arc<Mutex<Blockchain>>,
     offchain_storage: Arc<OffChainStorageManager>,
-) -> JsonRpcResponse<String> { // Returns Tx Hash on success
-    match serde_json::from_value::<SendTransactionParams>(params.clone()) { // Clone params for parsing
+) -> JsonRpcResponse<serde_json::Value> { // Corrected return type
+    let request_id = None; // ID is handled by the main handler
+    match serde_json::from_value::<SendTransactionParams>(params.clone()) {
         Ok(parsed_params) => {
+            // Corrected: Handle Option explicitly instead of using `?`
+            let sender_result = parsed_params.sender.ok_or_else(|| "Missing sender".to_string());
+
             let tx_result = if let Some(payload_base64) = parsed_params.payload_base64 {
                 // --- Storage Transaction --- 
                 info!("Processing send_transaction (storage type)");
-                let sender = parsed_params.sender.ok_or_else(|| "Missing sender for storage transaction".to_string())?;
-                match base64_engine.decode(payload_base64) {
-                    Ok(payload_data) => {
-                        let data_size = payload_data.len() as u64;
-                        match offchain_storage.store_payload(&payload_data) {
-                            Ok(payload_hash) => {
-                                let tx = Transaction::new_storage(sender, payload_hash, data_size);
-                                Ok(tx)
+                match sender_result {
+                    Ok(sender) => {
+                        match base64_engine.decode(payload_base64) {
+                            Ok(payload_data) => {
+                                let data_size = payload_data.len() as u64;
+                                match offchain_storage.store_payload(&payload_data) {
+                                    Ok(payload_hash) => {
+                                        let tx = Transaction::new_storage(sender, payload_hash, data_size);
+                                        Ok(tx)
+                                    }
+                                    Err(e) => Err(format!("Failed to store offchain payload: {}", e)),
+                                }
                             }
-                            Err(e) => Err(format!("Failed to store offchain payload: {}", e)),
+                            Err(e) => Err(format!("Invalid base64 payload data: {}", e)),
                         }
                     }
-                    Err(e) => Err(format!("Invalid base64 payload data: {}", e)),
+                    Err(e) => Err(e), // Propagate missing sender error
                 }
-            } else if let (Some(sender), Some(recipient), Some(amount)) = (parsed_params.sender, parsed_params.recipient, parsed_params.amount) {
-                // --- Transfer Transaction --- 
+            } else if let (Some(recipient), Some(amount)) = (parsed_params.recipient, parsed_params.amount) {
+                 // --- Transfer Transaction --- 
                 info!("Processing send_transaction (transfer type)");
-                let tx = Transaction::new_transfer(sender, recipient, amount);
-                Ok(tx)
+                 match sender_result {
+                    Ok(sender) => {
+                        let tx = Transaction::new_transfer(sender, recipient, amount);
+                        Ok(tx)
+                    }
+                    Err(e) => Err(e), // Propagate missing sender error
+                 }
             } else {
                 Err("Invalid parameters: Provide either payload_base64 and sender, or sender, recipient, and amount.".to_string())
             };
@@ -151,55 +164,61 @@ async fn handle_send_transaction(
                             } else {
                                 warn!("Transaction {} already exists in mempool (RPC submission).", tx_hash_hex);
                             }
-                            create_success_response(None, tx_hash_hex) // Return hash
+                            // Corrected: Wrap result in serde_json::Value
+                            create_success_response(request_id, serde_json::to_value(tx_hash_hex).unwrap_or(serde_json::Value::Null))
                         }
                         Err(e) => {
                             error!("Failed to add transaction {} via RPC: {}", tx_hash_hex, e);
-                            create_error_response(None, -32000, format!("Failed to add transaction: {}", e), None)
+                            create_error_response(request_id, -32000, format!("Failed to add transaction: {}", e), None)
                         }
                     }
                 }
                 Err(e) => {
                     error!("Failed to create transaction from RPC params: {}", e);
-                    create_error_response(None, -32602, "Invalid params for transaction type".to_string(), Some(serde_json::json!(e)))
+                    create_error_response(request_id, -32602, "Invalid params for transaction type".to_string(), Some(serde_json::json!(e)))
                 }
             }
         }
         Err(e) => {
             error!("Failed to parse send_transaction params: {}", e);
-            create_error_response(None, -32602, "Invalid params structure".to_string(), Some(serde_json::json!(e.to_string())))
+            create_error_response(request_id, -32602, "Invalid params structure".to_string(), Some(serde_json::json!(e.to_string())))
         }
     }
 }
 
 async fn handle_get_chain_height(
     blockchain: Arc<Mutex<Blockchain>>,
-) -> JsonRpcResponse<Option<u64>> {
+) -> JsonRpcResponse<serde_json::Value> { // Corrected return type
+    let request_id = None;
     let height = blockchain.lock().expect("Blockchain lock poisoned").get_chain_height();
     info!("Processing get_chain_height. Result: {:?}", height);
-    create_success_response(None, height)
+    // Corrected: Wrap result in serde_json::Value
+    create_success_response(request_id, serde_json::to_value(height).unwrap_or(serde_json::Value::Null))
 }
 
 async fn handle_get_block_by_height(
     params: serde_json::Value,
     blockchain: Arc<Mutex<Blockchain>>,
-) -> JsonRpcResponse<Option<Block>> {
+) -> JsonRpcResponse<serde_json::Value> { // Corrected return type
+    let request_id = None;
     match serde_json::from_value::<GetBlockByHeightParams>(params) {
         Ok(parsed_params) => {
             let height = parsed_params.height;
             info!("Processing get_block_by_height for height: {}", height);
             match blockchain.lock().expect("Blockchain lock poisoned").get_block_by_height(height) {
-                Ok(Some(block)) => create_success_response(None, Some(block)),
-                Ok(None) => create_success_response(None, None),
+                Ok(block_option) => {
+                    // Corrected: Wrap result in serde_json::Value
+                    create_success_response(request_id, serde_json::to_value(block_option).unwrap_or(serde_json::Value::Null))
+                }
                 Err(e) => {
                     error!("Error fetching block by height {}: {}", height, e);
-                    create_error_response(None, -32001, format!("Storage error: {}", e), None)
+                    create_error_response(request_id, -32001, format!("Storage error: {}", e), None)
                 }
             }
         }
         Err(e) => {
             error!("Failed to parse get_block_by_height params: {}", e);
-            create_error_response(None, -32602, "Invalid params".to_string(), Some(serde_json::json!(e.to_string())))
+            create_error_response(request_id, -32602, "Invalid params".to_string(), Some(serde_json::json!(e.to_string())))
         }
     }
 }
@@ -207,7 +226,8 @@ async fn handle_get_block_by_height(
 async fn handle_get_block_by_hash(
     params: serde_json::Value,
     blockchain: Arc<Mutex<Blockchain>>,
-) -> JsonRpcResponse<Option<Block>> {
+) -> JsonRpcResponse<serde_json::Value> { // Corrected return type
+    let request_id = None;
     match serde_json::from_value::<GetBlockByHashParams>(params) {
         Ok(parsed_params) => {
             let hash_hex = parsed_params.hash;
@@ -218,25 +238,27 @@ async fn handle_get_block_by_hash(
                         let mut hash_array = [0u8; 32];
                         hash_array.copy_from_slice(&hash_bytes);
                         match blockchain.lock().expect("Blockchain lock poisoned").get_block_by_hash(&hash_array) {
-                            Ok(Some(block)) => create_success_response(None, Some(block)),
-                            Ok(None) => create_success_response(None, None),
+                            Ok(block_option) => {
+                                // Corrected: Wrap result in serde_json::Value
+                                create_success_response(request_id, serde_json::to_value(block_option).unwrap_or(serde_json::Value::Null))
+                            }
                             Err(e) => {
                                 error!("Error fetching block by hash {}: {}", hash_hex, e);
-                                create_error_response(None, -32001, format!("Storage error: {}", e), None)
+                                create_error_response(request_id, -32001, format!("Storage error: {}", e), None)
                             }
                         }
                     } else {
-                        create_error_response(None, -32602, "Invalid hash length".to_string(), None)
+                        create_error_response(request_id, -32602, "Invalid hash length".to_string(), None)
                     }
                 }
                 Err(_) => {
-                    create_error_response(None, -32602, "Invalid hex string for hash".to_string(), None)
+                    create_error_response(request_id, -32602, "Invalid hex string for hash".to_string(), None)
                 }
             }
         }
         Err(e) => {
             error!("Failed to parse get_block_by_hash params: {}", e);
-            create_error_response(None, -32602, "Invalid params".to_string(), Some(serde_json::json!(e.to_string())))
+            create_error_response(request_id, -32602, "Invalid params".to_string(), Some(serde_json::json!(e.to_string())))
         }
     }
 }
@@ -245,7 +267,8 @@ async fn handle_get_block_by_hash(
 async fn handle_get_offchain_data(
     params: serde_json::Value,
     offchain_storage: Arc<OffChainStorageManager>,
-) -> JsonRpcResponse<Option<String>> { // Returns base64 encoded data
+) -> JsonRpcResponse<serde_json::Value> { // Corrected return type
+    let request_id = None;
     match serde_json::from_value::<GetOffchainDataParams>(params) {
         Ok(parsed_params) => {
             let hash_hex = parsed_params.hash;
@@ -258,34 +281,53 @@ async fn handle_get_offchain_data(
                         match offchain_storage.retrieve_payload(&hash_array) {
                             Ok(payload_data) => {
                                 let payload_base64 = base64_engine.encode(payload_data);
-                                create_success_response(None, Some(payload_base64))
+                                // Corrected: Wrap result in serde_json::Value
+                                create_success_response(request_id, serde_json::to_value(Some(payload_base64)).unwrap_or(serde_json::Value::Null))
                             }
                             Err(OffChainStorageError::NotFound(_)) => {
                                 // Data not found is not a JSON-RPC error, return null result
-                                create_success_response::<Option<String>>(None, None)
+                                create_success_response::<Option<String>>(request_id, None)
+                                    .map_result(|_| serde_json::Value::Null) // Ensure correct type
                             }
                             Err(e) => {
                                 error!("Error retrieving offchain data for hash {}: {}", hash_hex, e);
-                                create_error_response(None, -32002, format!("Offchain storage error: {}", e), None)
+                                create_error_response(request_id, -32002, format!("Offchain storage error: {}", e), None)
                             }
                         }
                     } else {
-                        create_error_response(None, -32602, "Invalid hash length".to_string(), None)
+                        create_error_response(request_id, -32602, "Invalid hash length".to_string(), None)
                     }
                 }
                 Err(_) => {
-                    create_error_response(None, -32602, "Invalid hex string for hash".to_string(), None)
+                    create_error_response(request_id, -32602, "Invalid hex string for hash".to_string(), None)
                 }
             }
         }
         Err(e) => {
             error!("Failed to parse get_offchain_data params: {}", e);
-            create_error_response(None, -32602, "Invalid params".to_string(), Some(serde_json::json!(e.to_string())))
+            create_error_response(request_id, -32602, "Invalid params".to_string(), Some(serde_json::json!(e.to_string())))
         }
     }
 }
 
 // --- Helper Functions for Responses (Keep existing ones) ---
+
+// Helper to map result type for JsonRpcResponse
+impl<T> JsonRpcResponse<T> {
+    fn map_result<U, F>(self, f: F) -> JsonRpcResponse<U>
+    where
+        F: FnOnce(T) -> U,
+        T: Serialize,
+        U: Serialize,
+    {
+        JsonRpcResponse {
+            jsonrpc: self.jsonrpc,
+            result: self.result.map(f),
+            error: self.error,
+            id: self.id,
+        }
+    }
+}
 
 fn create_success_response<T: Serialize>(
     id: Option<serde_json::Value>,
