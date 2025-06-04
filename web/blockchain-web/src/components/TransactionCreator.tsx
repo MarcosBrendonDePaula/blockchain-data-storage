@@ -83,12 +83,12 @@ const TransactionCreator: React.FC<TransactionCreatorProps> = ({ selectedWallet,
         <div className="text-center py-8">
           <div className="text-green-600 font-bold text-xl mb-2">Transação enviada com sucesso!</div>
           <p className="mb-4">
-            <span className="font-bold">{amount} COINS</span> foram enviados para o endereço {recipientAddress.substring(0, 10)}...{recipientAddress.substring(recipientAddress.length - 10)}.
+            <span className="font-bold">{amount} COINS</span> foram enviados para o endereço {recipient.substring(0, 10)}...{recipient.substring(recipient.length - 10)}.
           </p>
           <button
             onClick={() => {
               setIsSuccess(false);
-              setRecipientAddress('');
+              setRecipient('');
               setAmount('');
             }}
             className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 transition-colors"
@@ -117,8 +117,8 @@ const TransactionCreator: React.FC<TransactionCreatorProps> = ({ selectedWallet,
             <input
               type="text"
               id="recipientAddress"
-              value={recipientAddress}
-              onChange={(e) => setRecipientAddress(e.target.value)}
+              value={recipient}
+              onChange={(e) => setRecipient(e.target.value)}
               className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="Endereço da carteira de destino"
               disabled={isLoading}

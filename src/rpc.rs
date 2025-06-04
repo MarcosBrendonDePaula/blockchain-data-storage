@@ -1,6 +1,7 @@
 // src/rpc.rs
 
 use actix_web::{web, App, HttpServer, Responder, HttpResponse, post};
+use actix_cors::Cors;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use log::{info, error, warn};
@@ -375,7 +376,15 @@ pub async fn start_rpc_server(
     });
 
     HttpServer::new(move || {
+        // Configuração do CORS para permitir requisições do frontend
+        let cors = Cors::default()
+            .allow_any_origin() // Permite qualquer origem durante o desenvolvimento
+            .allow_any_method()
+            .allow_any_header()
+            .max_age(3600); // Cache de preflight por 1 hora
+            
         App::new()
+            .wrap(cors) // Adiciona o middleware CORS
             .app_data(app_state.clone())
             .service(rpc_handler)
     })
