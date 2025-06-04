@@ -1,6 +1,5 @@
 /target
 .blockchain_data
-
 # Frontend ignores
 web/blockchain-web/node_modules
 web/blockchain-web/.pnpm-store
