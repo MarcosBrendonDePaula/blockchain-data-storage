@@ -1,17 +1,24 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import WalletCreator from './components/WalletCreator';
 import WalletList from './components/WalletList';
 import CoinCreator from './components/CoinCreator';
 import TransactionCreator from './components/TransactionCreator';
-import { Wallet } from './utils/wallet';
-import './App.css';
-
-function App() {
+import { Wallet, getWallets } from './utils/wallet'; // Importar getWallets
+import './Appfunction App() {
   const [selectedWallet, setSelectedWallet] = useState<Wallet | null>(null);
-  const [activeTab, setActiveTab] = useState<'carteiras' | 'criar-moeda' | 'transacoes'>('carteiras');
+  const [activeTab, setActiveTab] = useState<
+    'carteiras' | 'criar-moeda' | 'transacoes'
+  >('carteiras');
+  const [wallets, setWallets] = useState<Wallet[]>([]); // Estado para armazenar as carteiras
 
-  const handleWalletCreated = () => {
+  // Carregar carteiras do localStorage ao montar o componente
+  useEffect(() => {
+    setWallets(getWallets());
+  }, []);
+
+  const handleWalletCreated = (newWallet: Wallet) => {
     // Atualizar a lista de carteiras quando uma nova for criada
+    setWallets((prevWallets) => [...prevWallets, newWallet]);
     setActiveTab('carteiras');
   };
 
@@ -87,7 +94,8 @@ function App() {
                   <div>
                     <WalletCreator onWalletCreated={handleWalletCreated} />
                     <div className="mt-6">
-                      <WalletList onSelectWallet={handleSelectWallet} />
+                      {/* Passar o estado wallets para WalletList */}
+                      <WalletList wallets={wallets} selectedWallet={selectedWallet} onSelectWallet={handleSelectWallet} />
                     </div>
                   </div>
                 )}
@@ -95,7 +103,7 @@ function App() {
                   <CoinCreator selectedWallet={selectedWallet} />
                 )}
                 {activeTab === 'transacoes' && (
-                  <TransactionCreator selectedWallet={selectedWallet} />
+                  <TransactionCreator selectedWallet={selectedWallet} wallets={wallets} />
                 )}
               </div>
             </div>
