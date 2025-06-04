@@ -4,7 +4,9 @@ import WalletList from './components/WalletList';
 import CoinCreator from './components/CoinCreator';
 import TransactionCreator from './components/TransactionCreator';
 import { Wallet, getWallets } from './utils/wallet'; // Importar getWallets
-import './Appfunction App() {
+import './App.css';
+
+function App() {
   const [selectedWallet, setSelectedWallet] = useState<Wallet | null>(null);
   const [activeTab, setActiveTab] = useState<
     'carteiras' | 'criar-moeda' | 'transacoes'
