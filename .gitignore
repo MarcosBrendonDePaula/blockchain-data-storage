@@ -1,2 +1,18 @@
 /target
 .blockchain_data
+
+# Frontend ignores
+web/blockchain-web/node_modules
+web/blockchain-web/.pnpm-store
+web/blockchain-web/dist
+web/blockchain-web/build
+web/blockchain-web/.env
+web/blockchain-web/.env.local
+web/blockchain-web/.env.development.local
+web/blockchain-web/.env.test.local
+web/blockchain-web/.env.production.local
+web/blockchain-web/npm-debug.log*
+web/blockchain-web/yarn-debug.log*
+web/blockchain-web/yarn-error.log*
+web/blockchain-web/pnpm-debug.log*
+web/blockchain-web/.DS_Store
