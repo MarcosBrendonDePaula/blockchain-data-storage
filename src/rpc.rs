@@ -8,7 +8,7 @@ use log::{info, error, warn};
 use base64::{Engine as _, engine::general_purpose::STANDARD as base64_engine}; // For payload encoding
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::core::{Blockchain, Transaction};
+use crate::core::{Blockchain, Transaction, TokenMetadata, Address, Hash}; // Import TokenMetadata, Address, Hash
 use crate::offchain_storage::{OffChainStorageManager, OffChainStorageError}; // Import offchain storage
 
 // --- JSON-RPC Structures (Keep existing ones) ---
@@ -41,14 +41,16 @@ struct JsonRpcError {
 // Combined structure for sending transactions (transfer or storage)
 #[derive(Deserialize, Debug)]
 struct SendTransactionParams {
-    // For transfer
-    sender: Option<Vec<u8>>,
+    sender: Vec<u8>, // Sender is always required now
+    // For native transfer
     recipient: Option<Vec<u8>>,
     amount: Option<u64>,
+    // For token transfer
+    token_id: Option<String>, // Hex-encoded token hash
+    token_amount: Option<u64>,
+    token_recipient: Option<Vec<u8>>,
     // For storage
     payload_base64: Option<String>, // Payload data encoded in base64
-    // Common (or inferred)
-    // We might need sender even for storage tx
 }
 
 #[derive(Deserialize, Debug)]
@@ -64,6 +66,28 @@ struct GetBlockByHashParams {
 #[derive(Deserialize, Debug)]
 struct GetOffchainDataParams {
     hash: String, // Hex-encoded hash of the payload
+}
+
+// Structure for get_balance parameters (native currency)
+#[derive(Deserialize, Debug)]
+struct GetBalanceParams {
+    address: String, // Endereço da carteira em formato hexadecimal
+}
+
+// Structure for create_token parameters
+#[derive(Deserialize, Debug)]
+struct CreateTokenParams {
+    creator_address: String, // Hex-encoded address
+    token_name: String,
+    token_symbol: String,
+    initial_supply: u64,
+}
+
+// Structure for get_token_balance parameters
+#[derive(Deserialize, Debug)]
+struct GetTokenBalanceParams {
+    address: String, // Hex-encoded address
+    token_id: String, // Hex-encoded token hash (metadata hash)
 }
 
 // --- Application State ---
@@ -93,8 +117,10 @@ async fn rpc_handler(req_body: web::Json<JsonRpcRequest>, data: web::Data<AppSta
         "get_block_by_height" => handle_get_block_by_height(params, blockchain_arc).await,
         "get_block_by_hash" => handle_get_block_by_hash(params, blockchain_arc).await,
         "get_offchain_data" => handle_get_offchain_data(params, offchain_storage_arc).await,
-        "get_balance" => handle_get_balance(params, blockchain_arc).await, // Novo endpoint para consulta de saldo
-        "create_token" => handle_create_token(params, blockchain_arc, offchain_storage_arc).await, // Novo endpoint para criação de tokens
+        "get_balance" => handle_get_balance(params, blockchain_arc).await, // Endpoint para saldo nativo
+        "create_token" => handle_create_token(params, blockchain_arc, offchain_storage_arc).await, // Endpoint para criação de tokens
+        "list_tokens" => handle_list_tokens(data.clone()).await, // Novo endpoint para listar tokens
+        "get_token_balance" => handle_get_token_balance(params, blockchain_arc).await, // Novo endpoint para saldo de token
         _ => {
             error!("Unsupported RPC method: {}", method);
             create_error_response(
@@ -119,42 +145,49 @@ async fn handle_send_transaction(
     let request_id = None; // ID is handled by the main handler
     match serde_json::from_value::<SendTransactionParams>(params.clone()) {
         Ok(parsed_params) => {
-            // Corrected: Handle Option explicitly instead of using `?`
-            let sender_result = parsed_params.sender.ok_or_else(|| "Missing sender".to_string());
+            let sender = parsed_params.sender;
 
+            // Determine transaction type based on parameters
             let tx_result = if let Some(payload_base64) = parsed_params.payload_base64 {
                 // --- Storage Transaction --- 
                 info!("Processing send_transaction (storage type)");
-                match sender_result {
-                    Ok(sender) => {
-                        match base64_engine.decode(payload_base64) {
-                            Ok(payload_data) => {
-                                let data_size = payload_data.len() as u64;
-                                match offchain_storage.store_payload(&payload_data) {
-                                    Ok(payload_hash) => {
-                                        let tx = Transaction::new_storage(sender, payload_hash, data_size);
-                                        Ok(tx)
-                                    }
-                                    Err(e) => Err(format!("Failed to store offchain payload: {}", e)),
-                                }
+                match base64_engine.decode(payload_base64) {
+                    Ok(payload_data) => {
+                        let data_size = payload_data.len() as u64;
+                        match offchain_storage.store_payload(&payload_data) {
+                            Ok(payload_hash) => {
+                                let tx = Transaction::new_store_data(sender, payload_hash, data_size);
+                                Ok(tx)
                             }
-                            Err(e) => Err(format!("Invalid base64 payload data: {}", e)),
+                            Err(e) => Err(format!("Failed to store offchain payload: {}", e)),
                         }
                     }
-                    Err(e) => Err(e), // Propagate missing sender error
+                    Err(e) => Err(format!("Invalid base64 payload data: {}", e)),
+                }
+            } else if let (Some(token_id_hex), Some(token_amount), Some(token_recipient)) = 
+                      (parsed_params.token_id, parsed_params.token_amount, parsed_params.token_recipient) {
+                // --- Token Transfer Transaction --- 
+                info!("Processing send_transaction (token transfer type)");
+                match hex::decode(&token_id_hex) {
+                    Ok(token_id_bytes) => {
+                        if token_id_bytes.len() == 32 {
+                            let mut token_id_hash = [0u8; 32];
+                            token_id_hash.copy_from_slice(&token_id_bytes);
+                            let tx = Transaction::new_transfer_token(sender, token_recipient, token_id_hash, token_amount);
+                            Ok(tx)
+                        } else {
+                            Err("Invalid token_id length".to_string())
+                        }
+                    }
+                    Err(_) => Err("Invalid hex string for token_id".to_string()),
                 }
             } else if let (Some(recipient), Some(amount)) = (parsed_params.recipient, parsed_params.amount) {
-                 // --- Transfer Transaction --- 
-                info!("Processing send_transaction (transfer type)");
-                 match sender_result {
-                    Ok(sender) => {
-                        let tx = Transaction::new_transfer(sender, recipient, amount);
-                        Ok(tx)
-                    }
-                    Err(e) => Err(e), // Propagate missing sender error
-                 }
+                 // --- Native Transfer Transaction --- 
+                info!("Processing send_transaction (native transfer type)");
+                 let tx = Transaction::new_transfer_native(sender, recipient, amount);
+                 Ok(tx)
             } else {
-                Err("Invalid parameters: Provide either payload_base64 and sender, or sender, recipient, and amount.".to_string())
+                Err("Invalid parameters: Provide parameters for native transfer, token transfer, or storage.".to_string())
             };
 
             match tx_result {
@@ -315,6 +348,65 @@ async fn handle_get_offchain_data(
 }
 
 // --- Helper Functions for Responses (Keep existing ones) ---
+
+// Handler for listing all registered tokens
+async fn handle_list_tokens(
+    data: web::Data<AppState>,
+) -> JsonRpcResponse<serde_json::Value> {
+    let request_id = None;
+    info!("Processing list_tokens request");
+    // Access storage via AppState
+    match data.blockchain.lock().expect("Blockchain lock poisoned").storage.list_all_token_metadata() {
+        Ok(tokens) => {
+            create_success_response(request_id, serde_json::to_value(tokens).unwrap_or(serde_json::Value::Null))
+        }
+        Err(e) => {
+            error!("Error listing tokens: {}", e);
+            create_error_response(request_id, -32003, format!("Storage error listing tokens: {}", e), None)
+        }
+    }
+}
+
+// Handler for getting the balance of a specific token for an address
+async fn handle_get_token_balance(
+    params: serde_json::Value,
+    blockchain: Arc<Mutex<Blockchain>>,
+) -> JsonRpcResponse<serde_json::Value> {
+    let request_id = None;
+    match serde_json::from_value::<GetTokenBalanceParams>(params) {
+        Ok(parsed_params) => {
+            info!("Processing get_token_balance for address {} and token {}", parsed_params.address, parsed_params.token_id);
+            match (hex::decode(&parsed_params.address), hex::decode(&parsed_params.token_id)) {
+                (Ok(address_bytes), Ok(token_id_bytes)) => {
+                    if token_id_bytes.len() == 32 {
+                        let mut token_id_hash = [0u8; 32];
+                        token_id_hash.copy_from_slice(&token_id_bytes);
+                        match blockchain.lock().expect("Blockchain lock poisoned").get_token_balance(&address_bytes, &token_id_hash) {
+                            Ok(balance) => {
+                                // Return balance as a simple number or an object like { balance: ... }
+                                create_success_response(request_id, serde_json::json!({ "balance": balance }))
+                            }
+                            Err(e) => {
+                                error!("Error getting token balance: {}", e);
+                                // Distinguish between 'token not found' and other errors if needed
+                                create_error_response(request_id, -32004, format!("Error calculating token balance: {}", e), None)
+                            }
+                        }
+                    } else {
+                        create_error_response(request_id, -32602, "Invalid token_id length".to_string(), None)
+                    }
+                }
+                _ => {
+                    create_error_response(request_id, -32602, "Invalid hex string for address or token_id".to_string(), None)
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to parse get_token_balance params: {}", e);
+            create_error_response(request_id, -32602, "Invalid params structure".to_string(), Some(serde_json::json!(e.to_string())))
+        }
+    }
+}
 
 // Helper to map result type for JsonRpcResponse
 impl<T> JsonRpcResponse<T> {

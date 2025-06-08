@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Wallet } from '../utils/wallet';
-import { sendTransaction, walletToHexAddress } from '../utils/api';
+import { sendTransaction, sendTokenTransferTransaction, walletToHexAddress, listTokens, TokenMetadata } from '../utils/api';
 
 interface TransactionCreatorProps {
   selectedWallet: Wallet | null;
@@ -15,6 +15,31 @@ const TransactionCreator: React.FC<TransactionCreatorProps> = ({ selectedWallet,
   const [isSuccess, setIsSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [transactionHash, setTransactionHash] = useState<string | null>(null);
+  const [transactionType, setTransactionType] = useState<'native' | 'token'>('native');
+  const [tokens, setTokens] = useState<TokenMetadata[]>([]);
+  const [selectedToken, setSelectedToken] = useState<string>('');
+  const [loadingTokens, setLoadingTokens] = useState<boolean>(false);
+  
+  // Carregar lista de tokens disponíveis
+  useEffect(() => {
+    const fetchTokens = async () => {
+      try {
+        setLoadingTokens(true);
+        const fetchedTokens = await listTokens();
+        setTokens(fetchedTokens);
+        if (fetchedTokens.length > 0) {
+          setSelectedToken(fetchedTokens[0].metadata_hash);
+        }
+      } catch (error) {
+        console.error("Erro ao carregar tokens:", error);
+        setError("Não foi possível carregar a lista de tokens. Tente novamente mais tarde.");
+      } finally {
+        setLoadingTokens(false);
+      }
+    };
+    
+    fetchTokens();
+  }, []);
 
   const handleSendTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,6 +65,12 @@ const TransactionCreator: React.FC<TransactionCreatorProps> = ({ selectedWallet,
       return;
     }
 
+    // Validação específica para transferência de token
+    if (transactionType === 'token' && !selectedToken) {
+      setError('Selecione um token para transferir');
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
 
@@ -52,11 +83,24 @@ const TransactionCreator: React.FC<TransactionCreatorProps> = ({ selectedWallet,
       const senderBytes = new TextEncoder().encode(senderAddress);
       const recipientBytes = new TextEncoder().encode(recipientAddress);
       
-      const txHash = await sendTransaction(
-        senderBytes,
-        recipientBytes,
-        amountValue
-      );
+      let txHash: string;
+      
+      if (transactionType === 'native') {
+        // Transferência de moeda nativa
+        txHash = await sendTransaction(
+          senderBytes,
+          recipientBytes,
+          amountValue
+        );
+      } else {
+        // Transferência de token específico
+        txHash = await sendTokenTransferTransaction(
+          senderBytes,
+          recipientBytes,
+          selectedToken,
+          amountValue
+        );
+      }
       
       setTransactionHash(txHash);
       setIsSuccess(true);
@@ -83,7 +127,8 @@ const TransactionCreator: React.FC<TransactionCreatorProps> = ({ selectedWallet,
         <div className="text-center py-8">
           <div className="text-green-600 font-bold text-xl mb-2">Transação enviada com sucesso!</div>
           <p className="mb-4">
-            <span className="font-bold">{amount} COINS</span> foram enviados para o endereço {recipient.substring(0, 10)}...{recipient.substring(recipient.length - 10)}.
+            <span className="font-bold">{amount} {transactionType === 'native' ? 'COINS' : 
+              tokens.find(t => t.metadata_hash === selectedToken)?.symbol || 'TOKEN'}</span> foram enviados para o endereço {recipient.substring(0, 10)}...{recipient.substring(recipient.length - 10)}.
           </p>
           <button
             onClick={() => {
@@ -109,6 +154,67 @@ const TransactionCreator: React.FC<TransactionCreatorProps> = ({ selectedWallet,
               Saldo disponível: <span className="font-medium">{selectedWallet.balance} COINS</span>
             </div>
           </div>
+          
+          {/* Tipo de transação */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Tipo de Transação
+            </label>
+            <div className="flex space-x-4">
+              <label className="inline-flex items-center">
+                <input
+                  type="radio"
+                  className="form-radio"
+                  name="transactionType"
+                  value="native"
+                  checked={transactionType === 'native'}
+                  onChange={() => setTransactionType('native')}
+                  disabled={isLoading}
+                />
+                <span className="ml-2">Moeda Nativa (COINS)</span>
+              </label>
+              <label className="inline-flex items-center">
+                <input
+                  type="radio"
+                  className="form-radio"
+                  name="transactionType"
+                  value="token"
+                  checked={transactionType === 'token'}
+                  onChange={() => setTransactionType('token')}
+                  disabled={isLoading || tokens.length === 0}
+                />
+                <span className="ml-2">Token</span>
+              </label>
+            </div>
+          </div>
+          
+          {/* Seletor de token (apenas visível quando transactionType === 'token') */}
+          {transactionType === 'token' && (
+            <div>
+              <label htmlFor="tokenSelect" className="block text-sm font-medium text-gray-700 mb-1">
+                Selecione o Token
+              </label>
+              {loadingTokens ? (
+                <div className="text-sm text-gray-500">Carregando tokens...</div>
+              ) : tokens.length === 0 ? (
+                <div className="text-sm text-red-500">Nenhum token disponível</div>
+              ) : (
+                <select
+                  id="tokenSelect"
+                  value={selectedToken}
+                  onChange={(e) => setSelectedToken(e.target.value)}
+                  className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  disabled={isLoading}
+                >
+                  {tokens.map((token) => (
+                    <option key={token.metadata_hash} value={token.metadata_hash}>
+                      {token.name} ({token.symbol})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
           
           <div>
             <label htmlFor="recipientAddress" className="block text-sm font-medium text-gray-700 mb-1">
@@ -137,7 +243,7 @@ const TransactionCreator: React.FC<TransactionCreatorProps> = ({ selectedWallet,
               className="w-full p-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="Ex: 100"
               min="0.000001"
-              max={selectedWallet.balance.toString()}
+              max={transactionType === 'native' ? selectedWallet.balance.toString() : undefined}
               step="0.000001"
               disabled={isLoading}
             />
@@ -151,7 +257,7 @@ const TransactionCreator: React.FC<TransactionCreatorProps> = ({ selectedWallet,
           
           <button
             type="submit"
-            disabled={isLoading}
+            disabled={isLoading || (transactionType === 'token' && tokens.length === 0)}
             className="w-full py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 transition-colors disabled:bg-blue-300 disabled:cursor-not-allowed"
           >
             {isLoading ? 'Enviando...' : 'Enviar Transação'}

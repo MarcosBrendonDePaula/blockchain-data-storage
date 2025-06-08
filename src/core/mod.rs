@@ -19,47 +19,116 @@ pub type Hash = [u8; 32];
 // Placeholder for public key/address type
 pub type Address = Vec<u8>;
 
+// Represents metadata for a custom token
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TokenMetadata {
+    pub name: String,
+    pub symbol: String,
+    pub total_supply: u64,
+    pub creator: Address,
+    pub creation_timestamp: u64,
+    pub metadata_hash: Hash, // Hash of this metadata, used as token ID
+}
+
+impl TokenMetadata {
+    pub fn calculate_hash(&self) -> Hash {
+        let mut temp_meta = self.clone();
+        temp_meta.metadata_hash = [0u8; 32]; // Zero out hash field for consistent hashing
+        let mut hasher = Sha256::new();
+        let serialized = bincode::serialize(&temp_meta).expect("Failed to serialize token metadata for hashing");
+        hasher.update(&serialized);
+        hasher.finalize().into()
+    }
+}
+
+// Enum to define different transaction types
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum TransactionType {
+    TransferNative, // Transfer the base currency
+    TransferToken { token_id: Hash, amount: u64 }, // Transfer a specific token
+    CreateToken { metadata: TokenMetadata }, // Create a new token
+    StoreData { data_hash: Hash, data_size: u64 }, // Store off-chain data reference
+}
+
 // Represents a single transaction in the blockchain
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Transaction {
     sender: Address,
-    receiver: Address,
-    amount: u64,
+    receiver: Option<Address>, // Optional for some types like CreateToken
+    // amount: u64, // Amount is now part of TransactionType for transfers
     timestamp: u64,
-    data_hash: Option<Vec<u8>>,
-    data_size: Option<u64>,
+    // data_hash: Option<Vec<u8>>, // Replaced by TransactionType::StoreData
+    // data_size: Option<u64>, // Replaced by TransactionType::StoreData
+    transaction_type: TransactionType,
     // signature: Vec<u8>,
     // nonce: u64,
 }
 
 impl Transaction {
-    pub fn new_transfer(sender: Address, receiver: Address, amount: u64) -> Self {
+    // Constructor for native currency transfer
+    pub fn new_transfer_native(sender: Address, receiver: Address, amount: u64) -> Self {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time went backwards")
             .as_secs();
         Transaction {
             sender,
-            receiver,
-            amount,
+            receiver: Some(receiver),
             timestamp,
-            data_hash: None,
-            data_size: None,
+            transaction_type: TransactionType::TransferNative { amount }, // Specify amount here
         }
     }
 
-    pub fn new_storage(sender: Address, data_hash: Hash, data_size: u64) -> Self {
+    // Constructor for custom token transfer
+    pub fn new_transfer_token(sender: Address, receiver: Address, token_id: Hash, amount: u64) -> Self {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("Time went backwards")
             .as_secs();
         Transaction {
             sender,
-            receiver: vec![],
-            amount: 0,
+            receiver: Some(receiver),
             timestamp,
-            data_hash: Some(data_hash.to_vec()),
-            data_size: Some(data_size),
+            transaction_type: TransactionType::TransferToken { token_id, amount },
+        }
+    }
+
+    // Constructor for creating a new token
+    pub fn new_create_token(sender: Address, name: String, symbol: String, total_supply: u64) -> Self {
+        let creation_timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_secs();
+        
+        let mut metadata = TokenMetadata {
+            name,
+            symbol,
+            total_supply,
+            creator: sender.clone(),
+            creation_timestamp,
+            metadata_hash: [0u8; 32], // Placeholder, will be calculated
+        };
+        metadata.metadata_hash = metadata.calculate_hash(); // Calculate the actual hash
+
+        Transaction {
+            sender,
+            receiver: None, // No specific receiver for token creation
+            timestamp: creation_timestamp, // Use the same timestamp
+            transaction_type: TransactionType::CreateToken { metadata },
+        }
+    }
+
+    // Updated constructor for storing data hash
+    pub fn new_store_data(sender: Address, data_hash: Hash, data_size: u64) -> Self {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_secs();
+        Transaction {
+            sender,
+            receiver: None, // No receiver for data storage
+            timestamp,
+            transaction_type: TransactionType::StoreData { data_hash, data_size },
         }
     }
 
@@ -325,6 +394,25 @@ pub fn add_block(&mut self, block: Block) -> Result<(), BlockchainError> {
         }
 
         // TODO: Add transaction validation logic here (e.g., check signatures, balances)
+        // Iterate through transactions to perform state updates (like saving token metadata)
+        for tx in &block.transactions {
+            match &tx.transaction_type {
+                TransactionType::CreateToken { metadata } => {
+                    // Save token metadata to storage
+                    match self.storage.save_token_metadata(metadata) {
+                        Ok(_) => info!("Saved metadata for token: {}", metadata.symbol),
+                        Err(e) => {
+                            // Decide how to handle this error. For now, log and potentially return error.
+                            error!("Failed to save token metadata for {}: {}", metadata.symbol, e);
+                            // Optionally return an error to halt block addition:
+                            // return Err(BlockchainError::Storage(e));
+                        }
+                    }
+                }
+                // Handle other transaction types if needed for state updates here
+                _ => {}
+            }
+        }
 
         // --- Save Block --- 
         // save_block now returns StorageError, handled by '?'
@@ -391,6 +479,55 @@ pub fn add_block(&mut self, block: Block) -> Result<(), BlockchainError> {
         debug!("Removed {} transactions from mempool after adding block {}.", tx_hashes.len(), block_height);
 
         Ok(())
+    }
+
+    /// Calculates the balance of a specific token for a given address.
+    /// Note: This iterates through the entire chain. For performance, consider a dedicated balance state.
+    pub fn get_token_balance(&self, address: &Address, token_id: &Hash) -> Result<u64, BlockchainError> {
+        let mut balance = 0u64;
+        let chain_height = self.get_chain_height().ok_or(BlockchainError::NotInitialized)?;
+
+        // Check if the token exists first (optional, but good practice)
+        if self.storage.get_token_metadata(token_id)?.is_none() {
+            // Or return Ok(0) if token not existing means zero balance
+            return Err(BlockchainError::Validation(format!("Token with ID {} not found", hex::encode(token_id))));
+        }
+
+        for height in 0..=chain_height {
+            // Use `?` to propagate potential StorageError
+            if let Some(block) = self.storage.get_block_by_height(height)? {
+                for tx in &block.transactions {
+                    match &tx.transaction_type {
+                        TransactionType::CreateToken { metadata } => {
+                            // If this is the token creation tx and the address is the creator,
+                            // grant the initial supply.
+                            if &metadata.metadata_hash == token_id && &metadata.creator == address {
+                                balance = balance.saturating_add(metadata.total_supply);
+                            }
+                        }
+                        TransactionType::TransferToken { token_id: tx_token_id, amount } => {
+                            // Check if this transfer involves the target token
+                            if tx_token_id == token_id {
+                                // If the address is the sender, decrease balance
+                                if &tx.sender == address {
+                                    balance = balance.saturating_sub(*amount);
+                                }
+                                // If the address is the receiver, increase balance
+                                if tx.receiver.as_ref() == Some(address) {
+                                    balance = balance.saturating_add(*amount);
+                                }
+                            }
+                        }
+                        // Other transaction types don't affect token balances directly
+                        _ => {}
+                    }
+                }
+            }
+            // If a block is missing (shouldn't happen in a valid chain), handle appropriately.
+            // For now, we assume the chain is consistent as checked by add_block.
+        }
+
+        Ok(balance)
     }
 }
 

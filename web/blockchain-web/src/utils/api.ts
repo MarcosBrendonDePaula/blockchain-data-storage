@@ -37,6 +37,21 @@ interface TokenCreationResult {
   metadata_hash: string;
 }
 
+// Interface para metadados de token (usado em list_tokens)
+export interface TokenMetadata {
+  name: string;
+  symbol: string;
+  total_supply: number;
+  creator: string; // Assuming address is returned as hex string
+  creation_timestamp: number;
+  metadata_hash: string; // Hex-encoded hash
+}
+
+// Interface para o resultado da consulta de saldo de token
+interface TokenBalanceResult {
+  balance: number;
+}
+
 /**
  * Função para fazer chamadas à API RPC da blockchain
  * @param method Nome do método RPC a ser chamado
@@ -79,6 +94,28 @@ export async function sendTransaction(sender: Uint8Array, recipient: Uint8Array,
     sender: Array.from(sender),
     recipient: Array.from(recipient),
     amount
+  });
+}
+
+/**
+ * Envia uma transação de transferência de token para a blockchain
+ * @param sender Endereço do remetente (Uint8Array)
+ * @param recipient Endereço do destinatário (Uint8Array)
+ * @param tokenId Hash do metadado do token (hex string)
+ * @param amount Quantidade do token a ser enviada
+ * @returns Hash da transação
+ */
+export async function sendTokenTransferTransaction(
+  sender: Uint8Array,
+  recipient: Uint8Array,
+  tokenId: string,
+  amount: number
+): Promise<string> {
+  return callRpcMethod<string>("send_transaction", {
+    sender: Array.from(sender),
+    token_recipient: Array.from(recipient), // Use token_recipient for token transfers
+    token_id: tokenId,
+    token_amount: amount,
   });
 }
 
@@ -174,3 +211,37 @@ export function walletToHexAddress(wallet: { address: string }): string {
   }
   return wallet.address;
 }
+
+
+
+/**
+ * Lista todos os tokens registrados na blockchain.
+ * @returns Uma promessa que resolve para um array de metadados de tokens.
+ */
+export async function listTokens(): Promise<TokenMetadata[]> {
+  try {
+    // Note: Assuming the backend returns the array directly in the result field
+    const response = await callRpcMethod<TokenMetadata[]>('list_tokens', {});
+    return response;
+  } catch (error) {
+    console.error("Erro ao listar tokens:", error);
+    throw new Error(`Erro ao listar tokens: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Obtém o saldo de um token específico para uma carteira.
+ * @param address Endereço da carteira (hex).
+ * @param tokenId Hash do metadado do token (hex).
+ * @returns Uma promessa que resolve para o saldo do token.
+ */
+export async function getTokenBalance(address: string, tokenId: string): Promise<number> {
+  try {
+    const response = await callRpcMethod<TokenBalanceResult>('get_token_balance', { address, token_id: tokenId });
+    return response.balance;
+  } catch (error) {
+    console.error(`Erro ao obter saldo do token ${tokenId} para a carteira ${address}:`, error);
+    throw new Error(`Erro ao obter saldo do token: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+

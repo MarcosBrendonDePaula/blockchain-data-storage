@@ -3,19 +3,18 @@
 //! Handles the persistence of blockchain data (blocks, etc.) to a local database.
 //! Currently uses RocksDB as the underlying key-value store.
 
-use crate::core::{Block, Hash};
-use rocksdb::{Options, DB, WriteBatch, Error as RocksDbError};
+use crate::core::{Block, Hash, TokenMetadata}; // Import TokenMetadata
+use rocksdb::{Options, DB, WriteBatch, Error as RocksDbError, IteratorMode};
 use std::path::Path;
 use std::sync::Arc;
 use log::{error, info};
 
 // Define key prefixes for different data types in RocksDB
 const PREFIX_BLOCK: u8 = b'b'; // Key: PREFIX_BLOCK + block_hash => Value: serialized_block
-// Removido PREFIX_HEADER não utilizado
 const PREFIX_HEIGHT_TO_HASH: u8 = b'h'; // Key: PREFIX_HEIGHT_TO_HASH + height (u64 BE) => Value: block_hash
+const PREFIX_TOKEN_METADATA: u8 = b't'; // Key: PREFIX_TOKEN_METADATA + token_hash => Value: serialized_token_metadata
 const KEY_LAST_HASH: &[u8] = b"lh"; // Key: KEY_LAST_HASH => Value: last_block_hash
 const KEY_CHAIN_HEIGHT: &[u8] = b"ch"; // Key: KEY_CHAIN_HEIGHT => Value: current_height (u64 BE)
-
 /// Manages the interaction with the RocksDB database for blockchain storage.
 #[derive(Debug, Clone)] // Clone is cheap due to Arc
 pub struct StorageManager {
@@ -173,6 +172,58 @@ impl StorageManager {
             }
             None => Ok(None), // Not set yet
         }
+    }
+
+    /// Saves the metadata for a newly created token.
+    pub fn save_token_metadata(&self, metadata: &TokenMetadata) -> Result<(), StorageError> {
+        let token_key = [&[PREFIX_TOKEN_METADATA], metadata.metadata_hash.as_slice()].concat();
+        let serialized_metadata = bincode::serialize(metadata)?;
+        self.db.put(&token_key, &serialized_metadata)?;
+        Ok(())
+    }
+
+    /// Retrieves the metadata for a specific token by its hash.
+    pub fn get_token_metadata(&self, token_hash: &Hash) -> Result<Option<TokenMetadata>, StorageError> {
+        let token_key = [&[PREFIX_TOKEN_METADATA], token_hash.as_slice()].concat();
+        match self.db.get(&token_key)? {
+            Some(serialized_metadata) => {
+                let metadata: TokenMetadata = bincode::deserialize(&serialized_metadata)?;
+                Ok(Some(metadata))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Lists all token metadata stored in the database.
+    pub fn list_all_token_metadata(&self) -> Result<Vec<TokenMetadata>, StorageError> {
+        let mut tokens = Vec::new();
+        let prefix = [PREFIX_TOKEN_METADATA];
+        let iter = self.db.iterator(IteratorMode::From(&prefix, rocksdb::Direction::Forward));
+
+        for item in iter {
+            match item {
+                Ok((key, value)) => {
+                    // Check if the key still starts with the prefix
+                    if !key.starts_with(&prefix) {
+                        break; // Stop iteration if we've moved past the token prefix
+                    }
+                    match bincode::deserialize::<TokenMetadata>(&value) {
+                        Ok(metadata) => tokens.push(metadata),
+                        Err(e) => {
+                            // Log error but continue trying to read other tokens
+                            error!("Failed to deserialize token metadata for key {:?}: {}", key, e);
+                            // Optionally, return the error immediately:
+                            // return Err(StorageError::Deserialization(e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Error during token metadata iteration: {}", e);
+                    return Err(StorageError::Database(e));
+                }
+            }
+        }
+        Ok(tokens)
     }
 }
 

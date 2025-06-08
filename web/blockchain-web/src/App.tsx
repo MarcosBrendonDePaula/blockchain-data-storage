@@ -3,19 +3,34 @@ import WalletCreator from './components/WalletCreator';
 import WalletList from './components/WalletList';
 import CoinCreator from './components/CoinCreator';
 import TransactionCreator from './components/TransactionCreator';
-import { Wallet, getWallets } from './utils/wallet'; // Importar getWallets
+import TokenList from './components/TokenList'; // Importar TokenList
+import { Wallet, getWallets } from './utils/wallet';
+import { listTokens, getTokenBalance, TokenMetadata, walletToHexAddress } from './utils/api'; // Importar funções e tipos de token
 import './App.css';
 
 function App() {
   const [selectedWallet, setSelectedWallet] = useState<Wallet | null>(null);
   const [activeTab, setActiveTab] = useState<
-    'carteiras' | 'criar-moeda' | 'transacoes'
+    'carteiras' | 'criar-moeda' | 'transacoes' | 'tokens' // Adicionar aba 'tokens'
   >('carteiras');
   const [wallets, setWallets] = useState<Wallet[]>([]); // Estado para armazenar as carteiras
+  const [allTokens, setAllTokens] = useState<TokenMetadata[]>([]); // Estado para todos os tokens
+  const [tokenBalances, setTokenBalances] = useState<Record<string, number>>({}); // Estado para saldos de tokens da carteira selecionada { tokenId: balance }
+  const [loadingBalances, setLoadingBalances] = useState<boolean>(false);
 
-  // Carregar carteiras do localStorage ao montar o componente
+  // Carregar carteiras do localStorage e lista de tokens da API ao montar o componente
   useEffect(() => {
     setWallets(getWallets());
+    const fetchInitialData = async () => {
+      try {
+        const tokens = await listTokens();
+        setAllTokens(tokens);
+      } catch (error) {
+        console.error("Erro ao buscar lista de tokens:", error);
+        // Opcional: mostrar erro para o usuário
+      }
+    };
+    fetchInitialData();
   }, []);
 
   const handleWalletCreated = (newWallet: Wallet) => {
@@ -24,8 +39,30 @@ function App() {
     setActiveTab('carteiras');
   };
 
-  const handleSelectWallet = (wallet: Wallet) => {
+  // Atualizado para buscar saldos de tokens quando uma carteira é selecionada
+  const handleSelectWallet = async (wallet: Wallet) => {
     setSelectedWallet(wallet);
+    setTokenBalances({}); // Limpar saldos antigos
+    setLoadingBalances(true);
+    const balances: Record<string, number> = {};
+    const addressHex = walletToHexAddress(wallet);
+    try {
+      for (const token of allTokens) {
+        try {
+          const balance = await getTokenBalance(addressHex, token.metadata_hash);
+          balances[token.metadata_hash] = balance;
+        } catch (error) {
+          console.error(`Erro ao buscar saldo do token ${token.symbol} para ${addressHex}:`, error);
+          balances[token.metadata_hash] = 0; // Assumir 0 se houver erro
+        }
+      }
+      setTokenBalances(balances);
+    } catch (error) {
+      console.error("Erro ao buscar saldos de tokens:", error);
+      // Opcional: mostrar erro para o usuário
+    } finally {
+      setLoadingBalances(false);
+    }
   };
 
   return (
@@ -51,10 +88,26 @@ function App() {
                       {selectedWallet.address}
                     </div>
                   </div>
-                  <div className="mb-2">
-                    <span className="text-gray-600">Saldo:</span>
+                  <div className="mb-4">
+                    <span className="text-gray-600">Saldo Nativo:</span>
                     <div className="text-2xl font-bold">{selectedWallet.balance} COINS</div>
                   </div>
+
+                  {/* Exibir saldos de tokens */}
+                  <h3 className="text-lg font-semibold mb-2 border-t pt-3">Saldos de Tokens</h3>
+                  {loadingBalances ? (
+                    <div className="text-gray-500">Carregando saldos...</div>
+                  ) : (
+                    <div className="space-y-2">
+                      {allTokens.length === 0 && <p className="text-sm text-gray-500">Nenhum token encontrado.</p>}
+                      {allTokens.map((token) => (
+                        <div key={token.metadata_hash} className="flex justify-between items-center text-sm">
+                          <span className="text-gray-700">{token.symbol}:</span>
+                          <span className="font-medium">{(tokenBalances[token.metadata_hash] ?? 0).toLocaleString()}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="text-center py-4 text-gray-500">
