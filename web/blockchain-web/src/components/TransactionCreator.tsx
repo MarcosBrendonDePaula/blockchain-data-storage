@@ -4,21 +4,21 @@ import { sendTransaction, sendTokenTransferTransaction, walletToHexAddress, list
 
 interface TransactionCreatorProps {
   selectedWallet: Wallet | null;
-  wallets: Wallet[];
+  wallets?: Wallet[];
   onTransactionSent?: (amount: number) => void;
 }
 
-const TransactionCreator: React.FC<TransactionCreatorProps> = ({ selectedWallet, wallets, onTransactionSent }) => {
-  const [recipient, setRecipient] = useState('');
-  const [amount, setAmount] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isSuccess, setIsSuccess] = useState(false);
+const TransactionCreator: React.FC<TransactionCreatorProps> = ({ selectedWallet, onTransactionSent }) => {
+  const [recipient, setRecipient] = useState<string>('');
+  const [amount, setAmount] = useState<string>('');
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isSuccess, setIsSuccess] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [transactionHash, setTransactionHash] = useState<string | null>(null);
   const [transactionType, setTransactionType] = useState<'native' | 'token'>('native');
   const [tokens, setTokens] = useState<TokenMetadata[]>([]);
   const [selectedToken, setSelectedToken] = useState<string>('');
   const [loadingTokens, setLoadingTokens] = useState<boolean>(false);
+  // Removida variável não utilizada transactionHash
   
   // Carregar lista de tokens disponíveis
   useEffect(() => {
@@ -83,18 +83,16 @@ const TransactionCreator: React.FC<TransactionCreatorProps> = ({ selectedWallet,
       const senderBytes = new TextEncoder().encode(senderAddress);
       const recipientBytes = new TextEncoder().encode(recipientAddress);
       
-      let txHash: string;
-      
       if (transactionType === 'native') {
         // Transferência de moeda nativa
-        txHash = await sendTransaction(
+        await sendTransaction(
           senderBytes,
           recipientBytes,
           amountValue
         );
       } else {
         // Transferência de token específico
-        txHash = await sendTokenTransferTransaction(
+        await sendTokenTransferTransaction(
           senderBytes,
           recipientBytes,
           selectedToken,
@@ -102,7 +100,7 @@ const TransactionCreator: React.FC<TransactionCreatorProps> = ({ selectedWallet,
         );
       }
       
-      setTransactionHash(txHash);
+      // Transação enviada com sucesso
       setIsSuccess(true);
       if (onTransactionSent) {
         onTransactionSent(amountValue);

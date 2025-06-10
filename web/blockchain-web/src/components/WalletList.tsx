@@ -78,7 +78,7 @@ const WalletList: React.FC<WalletListProps> = ({ wallets, selectedWallet, onSele
             >
               <div className="flex justify-between items-center">
                 <div>
-                  <p className="font-medium">{wallet.name || 'Carteira sem nome'}</p>
+                  <p className="font-medium">Carteira {wallet.address.substring(0, 8)}...</p>
                   <p className="text-sm text-gray-500 break-all">{wallet.address}</p>
                 </div>
                 <div className="text-right">

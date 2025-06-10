@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import WalletCreator from './components/WalletCreator';
 import WalletList from './components/WalletList';
 import CoinCreator from './components/CoinCreator';
 import TransactionCreator from './components/TransactionCreator';
-import TokenList from './components/TokenList';
 import FileStorage from './components/FileStorage'; // Importar componente de armazenamento de arquivos
 import { Wallet, getWallets } from './utils/wallet';
 import { listTokens, getTokenBalance, TokenMetadata, walletToHexAddress } from './utils/api';

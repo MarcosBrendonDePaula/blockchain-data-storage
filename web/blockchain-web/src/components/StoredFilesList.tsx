@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Wallet } from '../utils/wallet';
 import { getOffchainData } from '../utils/api';
 

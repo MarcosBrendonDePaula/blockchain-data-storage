@@ -14,7 +14,7 @@ const CoinCreator: React.FC<CoinCreatorProps> = ({ selectedWallet, onCoinCreated
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [createdTokenInfo, setCreatedTokenInfo] = useState<any>(null);
+  // Removido estado não utilizado de createdTokenInfo
 
   const handleCreateCoin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,14 +41,14 @@ const CoinCreator: React.FC<CoinCreatorProps> = ({ selectedWallet, onCoinCreated
     try {
       // Chamada real para a API RPC da blockchain
       const walletAddress = walletToHexAddress(selectedWallet);
-      const tokenInfo = await createToken(
+      await createToken(
         walletAddress,
         coinName,
         coinSymbol,
         supply
       );
       
-      setCreatedTokenInfo(tokenInfo);
+      // Token criado com sucesso
       setIsSuccess(true);
       if (onCoinCreated) {
         onCoinCreated(supply);
