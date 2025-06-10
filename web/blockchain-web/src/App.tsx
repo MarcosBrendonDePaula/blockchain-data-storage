@@ -3,15 +3,16 @@ import WalletCreator from './components/WalletCreator';
 import WalletList from './components/WalletList';
 import CoinCreator from './components/CoinCreator';
 import TransactionCreator from './components/TransactionCreator';
-import TokenList from './components/TokenList'; // Importar TokenList
+import TokenList from './components/TokenList';
+import FileStorage from './components/FileStorage'; // Importar componente de armazenamento de arquivos
 import { Wallet, getWallets } from './utils/wallet';
-import { listTokens, getTokenBalance, TokenMetadata, walletToHexAddress } from './utils/api'; // Importar funções e tipos de token
+import { listTokens, getTokenBalance, TokenMetadata, walletToHexAddress } from './utils/api';
 import './App.css';
 
 function App() {
   const [selectedWallet, setSelectedWallet] = useState<Wallet | null>(null);
   const [activeTab, setActiveTab] = useState<
-    'carteiras' | 'criar-moeda' | 'transacoes' | 'tokens' // Adicionar aba 'tokens'
+    'carteiras' | 'criar-moeda' | 'transacoes' | 'tokens' | 'arquivos' // Adicionar aba 'arquivos'
   >('carteiras');
   const [wallets, setWallets] = useState<Wallet[]>([]); // Estado para armazenar as carteiras
   const [allTokens, setAllTokens] = useState<TokenMetadata[]>([]); // Estado para todos os tokens
@@ -118,9 +119,9 @@ function App() {
             </div>
 
             <div className="bg-white rounded-lg shadow-md overflow-hidden">
-              <div className="flex border-b">
+              <div className="flex flex-wrap border-b">
                 <button
-                  className={`flex-1 py-3 px-4 text-center font-medium ${
+                  className={`flex-1 py-3 px-2 text-center font-medium ${
                     activeTab === 'carteiras' ? 'bg-blue-100 text-blue-800' : 'text-gray-600 hover:bg-gray-50'
                   }`}
                   onClick={() => setActiveTab('carteiras')}
@@ -128,7 +129,7 @@ function App() {
                   Carteiras
                 </button>
                 <button
-                  className={`flex-1 py-3 px-4 text-center font-medium ${
+                  className={`flex-1 py-3 px-2 text-center font-medium ${
                     activeTab === 'criar-moeda' ? 'bg-blue-100 text-blue-800' : 'text-gray-600 hover:bg-gray-50'
                   }`}
                   onClick={() => setActiveTab('criar-moeda')}
@@ -136,12 +137,20 @@ function App() {
                   Criar Moeda
                 </button>
                 <button
-                  className={`flex-1 py-3 px-4 text-center font-medium ${
+                  className={`flex-1 py-3 px-2 text-center font-medium ${
                     activeTab === 'transacoes' ? 'bg-blue-100 text-blue-800' : 'text-gray-600 hover:bg-gray-50'
                   }`}
                   onClick={() => setActiveTab('transacoes')}
                 >
                   Transações
+                </button>
+                <button
+                  className={`flex-1 py-3 px-2 text-center font-medium ${
+                    activeTab === 'arquivos' ? 'bg-blue-100 text-blue-800' : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                  onClick={() => setActiveTab('arquivos')}
+                >
+                  Arquivos
                 </button>
               </div>
               <div className="p-4">
@@ -159,6 +168,9 @@ function App() {
                 )}
                 {activeTab === 'transacoes' && (
                   <TransactionCreator selectedWallet={selectedWallet} wallets={wallets} />
+                )}
+                {activeTab === 'arquivos' && (
+                  <FileStorage selectedWallet={selectedWallet} />
                 )}
               </div>
             </div>
